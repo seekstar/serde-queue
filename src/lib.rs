@@ -6,6 +6,7 @@
 
 use std::error::Error;
 use std::io::{self, Write};
+use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,8 @@ mod tests;
 
 pub struct SerdeQueue {
     // If start == end, then there is no data in v
+    // Note that it doesn't necessarily mean that the queue is empty,
+    // because it's possible that the serialized size of some types is zero.
     v: Vec<u8>,
     start: usize,
     end: usize,
@@ -137,5 +140,43 @@ impl SerdeQueue {
         let (v, remain) = postcard::take_from_bytes(&self.v[self.start..end])?;
         self.start = end - remain.len();
         Ok(Some(v))
+    }
+
+    pub fn iter<T>(&self) -> Iter<T> {
+        Iter {
+            q: self,
+            p: self.start,
+            num_read: 0,
+            phantom: PhantomData::default(),
+        }
+    }
+}
+
+pub struct Iter<'a, T> {
+    q: &'a SerdeQueue,
+    p: usize,
+    num_read: usize,
+    phantom: PhantomData<T>,
+}
+impl<'a, T: Deserialize<'a>> Iterator for Iter<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.num_read == self.q.num_elements {
+            return None;
+        }
+        self.num_read += 1;
+        let end;
+        if self.p == self.q.v.len() {
+            if self.p != self.q.end {
+                self.p = 0;
+            }
+            end = self.q.end;
+        } else {
+            end = self.q.v.len();
+        }
+        let (v, remain) =
+            postcard::take_from_bytes(&self.q.v[self.p..end]).unwrap();
+        self.p = end - remain.len();
+        Some(v)
     }
 }
